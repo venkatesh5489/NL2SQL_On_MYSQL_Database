@@ -10,7 +10,6 @@
 
 
 
-Gemini Pro: https://deepmind.google/technologies/gemini/pro/
 
 ### Get an API key: 
 		Head to https://ai.google.dev/gemini-api/docs/api-key to generate a Google AI API key. 
