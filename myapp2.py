@@ -1,71 +1,110 @@
 import os
 import streamlit as st
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from langchain.chains import create_sql_query_chain
 from langchain_google_genai import GoogleGenerativeAI
-from sqlalchemy import create_engine
-from sqlalchemy.exc import ProgrammingError
 from langchain_community.utilities import SQLDatabase
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Initialize Streamlit session state for conversation history, db, and chain
+if 'conversation_history' not in st.session_state:
+    st.session_state.conversation_history = []
+if 'db' not in st.session_state:
+    st.session_state.db = None
+if 'chain' not in st.session_state:
+    st.session_state.chain = None
 
-# Database connection parameters
-db_user = "root"
-db_password = "123456"
-db_host = "localhost"
-db_name = "retail_sales_db"
+# Frontend for the MySQL connection details
+st.title("Conversational MySQL Query App")
+st.write("Enter your MySQL connection details below.")
 
-# Create SQLAlchemy engine
-engine = create_engine(f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}")
+# Input fields for database connection
+db_user = st.text_input("MySQL Username", value="root")
+db_password = st.text_input("MySQL Password", value="", type="password")
+db_host = st.text_input("MySQL Host", value="localhost")
+db_name = st.text_input("Database Name", value="retail_sales_db")
 
-# Initialize SQLDatabase
-db = SQLDatabase(engine, sample_rows_in_table_info=3)
-
-# Initialize LLM (Google Generative AI)
-llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.environ["GOOGLE_API_KEY"])
-
-# Create SQL query chain
-chain = create_sql_query_chain(llm, db)
-
-# Function to execute the SQL query
-def execute_query(question, chain, db):
+# Button to connect to the database
+if st.button("Connect to Database"):
     try:
-        # Generate the SQL query based on the question
-        response = chain.invoke({"question": question})
-        
-        # Extract the SQL query part from the response
-        cleaned_query = response.split('SQLQuery: ')[1].strip()
-        
-        # Execute the cleaned query
-        result = db.run(cleaned_query)
-        
-        return cleaned_query, result
-    except ProgrammingError as e:
-        st.error(f"Database error: {str(e)}")
-        return None, None
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None, None
+        # Create SQLAlchemy engine using user inputs
+        engine = create_engine(f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}")
 
-# Streamlit interface
-st.title("Natural Language to SQL Query App")
+        # Initialize SQLDatabase and LangChain chain
+        db = SQLDatabase(engine)
+        llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.getenv("GOOGLE_API_KEY"))
+        chain = create_sql_query_chain(llm, db)
 
-# Input from the user
-question = st.text_input("Enter your question:")
+        # Save db and chain in session_state
+        st.session_state.db = db
+        st.session_state.chain = chain
 
-if st.button("Execute"):
-    if question:
-        # Execute the query and get the result
-        cleaned_query, query_result = execute_query(question, chain, db)
-        
-        if cleaned_query and query_result is not None:
-            # Display the generated SQL query and results
-            st.write("Generated SQL Query:")
-            st.code(cleaned_query, language="sql")
-            st.write("Query Result:")
-            st.write(query_result)
+        st.success("Successfully connected to the database!")
+
+    except OperationalError as e:
+        st.error(f"Failed to connect to the database: {str(e)}")
+
+# Ensure that the connection has been established before allowing query execution
+if st.session_state.db and st.session_state.chain:
+    # Input field for natural language question
+    question = st.text_input("Ask a question in natural language:")
+
+    # Button to execute the query
+    if st.button("Execute Query"):
+        if question:
+            # Function to execute query with conversation history
+            def execute_query(question, chain, db):
+                try:
+                    # Prepare full conversation as input
+                    conversation_input = "\n".join(st.session_state.conversation_history + [question])
+
+                    # Generate the SQL query based on the full conversation
+                    response = chain.invoke({"question": conversation_input})
+                    
+                    # Check if 'SQLQuery: ' exists in the response
+                    if 'SQLQuery: ' in response:
+                        # Extract the SQL query part from the response
+                        cleaned_query = response.split('SQLQuery: ')[1].strip()
+
+                        # Remove any LIMIT clause to ensure all data is fetched
+                        cleaned_query = cleaned_query.replace('LIMIT 5', '')  # Removes any LIMIT clause
+
+                        # Execute the cleaned query
+                        result = db.run(cleaned_query)
+
+                        # Update conversation history
+                        st.session_state.conversation_history.append(f"Q: {question}")
+                        st.session_state.conversation_history.append(f"SQLQuery: {cleaned_query}")
+                        return cleaned_query, result
+                    else:
+                        st.error("SQL query not found in the response. Please check the question.")
+                        return None, None
+                except ProgrammingError as e:
+                    st.error(f"Database error: {str(e)}")
+                    return None, None
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    return None, None
+
+            # Execute the query
+            cleaned_query, query_result = execute_query(question, st.session_state.chain, st.session_state.db)
+
+            if cleaned_query and query_result is not None:
+                # Display the generated SQL query
+                st.write("Generated SQL Query:")
+                st.code(cleaned_query, language="sql")
+
+                # Display the query result
+                st.write("Query Result:")
+                st.write(query_result)
+            else:
+                st.write("No result returned or an error occurred.")
         else:
-            st.write("No result returned due to an error.")
-    else:
-        st.write("Please enter a question.")
+            st.error("Please enter a question.")
+
+    # Display conversation history
+    st.write("### Conversation History")
+    for entry in st.session_state.conversation_history:
+        st.write(entry)
+else:
+    st.warning("Please connect to the database first.")
