@@ -3,8 +3,16 @@ import streamlit as st
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from langchain.chains import create_sql_query_chain
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import GenAIAqa, GoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
+import google.generativeai as genai
+import nltk
+from nltk.tokenize import word_tokenize
+
+
+api_key = "AIzaSyCH_S-qA2wbGSE-db_Fj8w8059dpjDkEOs"
+genai.configure(api_key=api_key)
+
 
 # Initialize Streamlit session state for conversation history, db, and chain
 if 'conversation_history' not in st.session_state:
@@ -22,7 +30,7 @@ st.write("Enter your MySQL connection details below.")
 db_user = st.text_input("MySQL Username", value="root")
 db_password = st.text_input("MySQL Password", value="", type="password")
 db_host = st.text_input("MySQL Host", value="localhost")
-db_name = st.text_input("Database Name", value="retail_sales_db")
+db_name = st.text_input("Database Name", value="sakila")
 
 # Button to connect to the database
 if st.button("Connect to Database"):
@@ -30,9 +38,10 @@ if st.button("Connect to Database"):
         # Create SQLAlchemy engine using user inputs
         engine = create_engine(f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}")
 
+        db = SQLDatabase(engine=engine)
         # Initialize SQLDatabase and LangChain chain
         db = SQLDatabase(engine)
-        llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.getenv("GOOGLE_API_KEY"))
+        llm = GoogleGenerativeAI(model="gemini-1.5-flash", google_api_key='AIzaSyCH_S-qA2wbGSE-db_Fj8w8059dpjDkEOs')
         chain = create_sql_query_chain(llm, db)
 
         # Save db and chain in session_state
@@ -75,6 +84,7 @@ if st.session_state.db and st.session_state.chain:
                         # Update conversation history
                         st.session_state.conversation_history.append(f"Q: {question}")
                         st.session_state.conversation_history.append(f"SQLQuery: {cleaned_query}")
+                        st.session_state.conversation_history.append(f"A: {result}")
                         return cleaned_query, result
                     else:
                         st.error("SQL query not found in the response. Please check the question.")
